@@ -648,3 +648,465 @@ task.spawn(function()
         end
     end
 end)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/IVRzHxZ/Kyo-UI-Library/refs/heads/main/Kyo-UI-LibraryxPrivate", true))()
+
+-- Make sure the Players service is available
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- Dynamically generate the window title with a welcome message
+local windowTitle = "KyoWxUniversal | Welcome, " .. LocalPlayer.DisplayName
+
+local window = library:AddWindow(windowTitle, {
+    main_color = Color3.fromRGB(41, 74, 122),
+    min_size = Vector2.new(300, 300),
+    can_resize = false
+})
+
+---------------------------------------------------------
+-- [SECTION 1: CUSTOM LEADERBOARD STATS SCANNER]
+---------------------------------------------------------
+local TrackerTab = window:AddTab("Stats 📊")
+
+-- The exact core stats visible on your game screen layout
+local TargetStatNames = {"Wins", "Strength", "Rebirth", "Level", "Health", "Speed"}
+local My_UI_Labels = {}
+local startingStats = {} 
+local trackedObjects = {} 
+local trackedAttributes = {} 
+local startTime = os.time() 
+
+-- Pre-construct the clean UI elements right away
+for _, name in ipairs(TargetStatNames) do
+    My_UI_Labels[name] = TrackerTab:AddLabel(name .. ": Loading...")
+end
+
+-- Number Abbreviation Engine (1000 -> 1K)
+local suffixes = {"K", "M", "B", "T", "QA", "QI"}
+local function formatNumber(value)
+    if not value or typeof(value) ~= "number" then return "0" end
+    if value < 1000 then return tostring(value) end
+    
+    local index = math.floor(math.log10(value) / 3)
+    local suffix = suffixes[index] or ""
+    local abbreviated = value / (10 ^ (index * 3))
+    
+    return string.format("%.1f", abbreviated):gsub("%.0$", "") .. suffix
+end
+
+-- Helper: Unpacks text data like "5.74k" or "8.3k" into a clean number
+local function cleanAndParseNumber(val)
+    if typeof(val) == "number" then return val end
+    if typeof(val) == "boolean" then return val and 1 or 0 end
+    if typeof(val) ~= "string" then return 0 end
+    
+    local cleanStr = string.upper(string.gsub(val, "[%s,]", ""))
+    local numPart = tonumber(string.match(cleanStr, "^[%d%.%-]+")) or 0
+    local textPart = string.match(cleanStr, "[A-Z]+$") or ""
+    local multipliers = {K = 10^3, M = 10^6, B = 10^9, T = 10^12}
+    if multipliers[textPart] then return numPart * multipliers[textPart] end
+    return numPart
+end
+
+-- Universal Search Engine to find where the game hides these specific stats
+local function findStatSource(statName)
+    local cleanTarget = string.lower(statName)
+    
+    -- Dictionary maps to catch variations (e.g. if Coins is saved internally as Cash)
+    local aliases = {
+        ["coins"] = {"coins", "coin", "cash", "money", "gold"},
+        ["strength"] = {"strength", "str", "power", "biceps"},
+        ["gems"] = {"gems", "gem", "diamonds", "diamond"},
+        ["prestige"] = {"prestige", "rebirth", "rebirths", "tier"},
+        ["kos"] = {"kos", "ko", "kills", "wipeouts"}
+    }
+    
+    local keywords = aliases[cleanTarget] or {cleanTarget}
+    
+    -- 1. Scan custom modern Player Attributes
+    for attrName, attrValue in pairs(LocalPlayer:GetAttributes()) do
+        local cleanAttr = string.lower(attrName)
+        for _, word in ipairs(keywords) do
+            if cleanAttr == word or string.find(cleanAttr, word) then
+                return nil, attrName, true
+            end
+        end
+    end
+    
+    -- 2. Deep search all descendants inside the player instance (leaderstats, PlayerGui, Data)
+    for _, descendant in ipairs(LocalPlayer:GetDescendants()) do
+        if descendant:IsA("ValueBase") or descendant.ClassName:find("Value") then
+            local cleanDescName = string.lower(descendant.Name)
+            for _, word in ipairs(keywords) do
+                if cleanDescName == word or string.find(cleanDescName, word) then
+                    return descendant, descendant.Name, false
+                end
+            end
+        end
+    end
+    
+    return nil, nil, false
+end
+
+-- Force an initialization step to map objects out upfront
+local function initializeTrackerMapping()
+    for _, name in ipairs(TargetStatNames) do
+        if name ~= "Health" and name ~= "Speed" then
+            local obj, realKey, isAttr = findStatSource(name)
+            if isAttr then
+                trackedAttributes[name] = realKey
+                startingStats[name] = cleanAndParseNumber(LocalPlayer:GetAttribute(realKey))
+            elseif obj then
+                trackedObjects[name] = obj
+                startingStats[name] = cleanAndParseNumber(obj.Value)
+            else
+                startingStats[name] = 0
+            end
+        end
+    end
+end
+
+-- Run mapping routine once at start
+initializeTrackerMapping()
+
+-- Asynchronous Visual Update Loop
+task.spawn(function()
+    while task.wait(0.2) do
+        local elapsedSeconds = math.max(os.time() - startTime, 1) 
+        
+        -- Hook character properties dynamically to handle respawns properly
+        local char = LocalPlayer.Character
+        local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+        
+        for _, name in ipairs(TargetStatNames) do
+            local uiElement = My_UI_Labels[name]
+            local currentVal = 0
+            local sourceFound = false
+            
+            -- Core Character tracking overrides
+            if name == "Health" then
+                currentVal = humanoid and humanoid.Health or 0
+                sourceFound = true
+            elseif name == "Speed" then
+                currentVal = humanoid and humanoid.WalkSpeed or 0
+                sourceFound = true
+            else
+                -- Pull data from calculated network values
+                local attrKey = trackedAttributes[name]
+                local objInstance = trackedObjects[name]
+                
+                if attrKey then
+                    currentVal = cleanAndParseNumber(LocalPlayer:GetAttribute(attrKey))
+                    sourceFound = true
+                elseif objInstance and objInstance.Parent then
+                    currentVal = cleanAndParseNumber(objInstance.Value)
+                    sourceFound = true
+                else
+                    -- Fallback scanner check in case values load delayed
+                    local newObj, newKey, newIsAttr = findStatSource(name)
+                    if newIsAttr then
+                        trackedAttributes[name] = newKey
+                        currentVal = cleanAndParseNumber(LocalPlayer:GetAttribute(newKey))
+                        sourceFound = true
+                    elseif newObj then
+                        trackedObjects[name] = newObj
+                        currentVal = cleanAndParseNumber(newObj.Value)
+                        sourceFound = true
+                    end
+                end
+            end
+            
+            if uiElement then
+                if sourceFound then
+                    local startVal = startingStats[name] or currentVal
+                    
+                    -- Safety zero latch
+                    if startVal == 0 and startingStats[name] == 0 then
+                        startingStats[name] = currentVal
+                        startVal = currentVal
+                    end
+                    
+                    local gained = currentVal - startVal
+                    local formattedCurrent = formatNumber(currentVal)
+                    
+                    -- Specialized formatting layout for clean visual aesthetics
+                    if name == "Health" then
+                        uiElement.Text = string.format("Health: %d / %d", currentVal, humanoid and humanoid.MaxHealth or 100)
+                    elseif name == "Speed" then
+                        uiElement.Text = string.format("Speed: %d studs/s", currentVal)
+                    elseif gained > 0 then
+                        local perSecond = gained / elapsedSeconds
+                        local perMinute = perSecond * 60
+                        local perHour = perSecond * 3600
+                        local perDay = perSecond * 86400
+                        local perWeek = perSecond * 604800
+                        
+                        uiElement.Text = string.format(
+                            "%s: %s (+%s) | /m: %s | /h: %s | /d: %s | /w: %s",
+                            name, 
+                            formattedCurrent, 
+                            formatNumber(gained),
+                            formatNumber(perMinute),
+                            formatNumber(perHour),
+                            formatNumber(perDay),
+                            formatNumber(perWeek)
+                        )
+                    else
+                        uiElement.Text = name .. ": " .. formattedCurrent .. " (+0) | /m: 0 | /h: 0 | /d: 0 | /w: 0"
+                    end
+                else
+                    uiElement.Text = name .. ": Not Tracked"
+                end
+            end
+        end
+    end
+end)
+
+---------------------------------------------------------
+-- [SECTION 2: CUSTOM SPY LEADERBOARD STATS SCANNER]
+---------------------------------------------------------
+-- Core Environment Definitions
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local SpyTab = window:AddTab("Spy Stats Player 👁️")
+
+-- 1. MGA CORE VARIABLES (Dapat mauna para mabasa ng Dropdown)
+local targetPlayer = nil 
+local TargetStatNames = {"Wins", "Strength", "Rebirth", "Level", "Health", "Speed"}
+local Spy_UI_Labels = {}
+local targetBaselineStats = {} 
+local spyStartTime = os.time() 
+
+-- 2. NUMBER AT PARSING FUNCTIONS
+local suffixes = {"K", "M", "B", "T", "QA", "QI"}
+local function formatNumber(value)
+    if not value or typeof(value) ~= "number" then return "0" end
+    if value < 1000 then return tostring(value) end
+    
+    local index = math.floor(math.log10(value) / 3)
+    local suffix = suffixes[index] or ""
+    local abbreviated = value / (10 ^ (index * 3))
+    
+    return string.format("%.1f", abbreviated):gsub("%.0$", "") .. suffix
+end
+
+local function cleanAndParseNumber(val)
+    if typeof(val) == "number" then return val end
+    if typeof(val) == "boolean" then return val and 1 or 0 end
+    if typeof(val) ~= "string" then return 0 end
+    
+    local cleanStr = string.upper(string.gsub(val, "[%s,]", ""))
+    local numPart = tonumber(string.match(cleanStr, "^[%d%.%-]+")) or 0
+    local textPart = string.match(cleanStr, "[A-Z]+$") or ""
+    local multipliers = {K = 10^3, M = 10^6, B = 10^9, T = 10^12}
+    if multipliers[textPart] then return numPart * multipliers[textPart] end
+    return numPart
+end
+
+-- 3. INTERFACE RESET FUNCTION
+local function resetSpyTracking()
+    targetBaselineStats = {}
+    for _, name in ipairs(TargetStatNames) do
+        if Spy_UI_Labels[name] then
+            Spy_UI_Labels[name].Text = name .. ": N/A"
+        end
+    end
+end
+
+-- 4. SMART STAT SCANNER FUNCTION
+local function getRemotePlayerStat(plr, statName)
+    if not plr or not plr.Parent then return nil end
+    local cleanTarget = string.lower(statName)
+    
+    local aliases = {
+        ["coins"] = {"coins", "coin", "cash", "money", "gold"},
+        ["strength"] = {"strength", "str", "power", "biceps"},
+        ["gems"] = {"gems", "gem", "diamonds", "diamond"},
+        ["prestige"] = {"prestige", "rebirth", "rebirths", "tier"},
+        ["kos"] = {"kos", "ko", "kills", "wipeouts"}
+    }
+    
+    local keywords = aliases[cleanTarget] or {cleanTarget}
+    
+    -- Check leaderstats / Folders
+    local commonFolders = {"leaderstats", "Stats", "Data", "leaderstats2"}
+    for _, fName in ipairs(commonFolders) do
+        local folder = plr:FindFirstChild(fName)
+        if folder then
+            for _, child in ipairs(folder:GetChildren()) do
+                local cName = string.lower(child.Name)
+                for _, word in ipairs(keywords) do
+                    if cName == word or string.find(cName, word) then
+                        if child:IsA("ValueBase") or child.ClassName:find("Value") then
+                            return cleanAndParseNumber(child.Value)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Check Attributes
+    for attrName, attrValue in pairs(plr:GetAttributes()) do
+        local cAttr = string.lower(attrName)
+        for _, word in ipairs(keywords) do
+            if cAttr == word or string.find(cAttr, word) then
+                return cleanAndParseNumber(attrValue)
+            end
+        end
+    end
+    
+    return nil
+end
+
+-- =========================================================
+-- [DROPDOWN MENU - GUMAWA SA TAAS NG LABELS]
+-- =========================================================
+local PlayerDropdown = SpyTab:AddDropdown("Select Player...", function(selectedName)
+    if selectedName == "None" or selectedName == "" then
+        targetPlayer = nil
+        resetSpyTracking()
+        return
+    end
+
+    local foundPlayer = Players:FindFirstChild(selectedName)
+    if foundPlayer then
+        resetSpyTracking()
+        targetPlayer = foundPlayer
+        spyStartTime = os.time() 
+        
+        -- Kunin agad ang paunang stats ng napiling player
+        for _, name in ipairs(TargetStatNames) do
+            if name ~= "Health" and name ~= "Speed" then
+                local initialVal = getRemotePlayerStat(targetPlayer, name)
+                if initialVal then
+                    targetBaselineStats[name] = initialVal
+                end
+            end
+        end
+    else
+        targetPlayer = nil
+        resetSpyTracking()
+    end
+end)
+
+-- Pag-refresh ng mga pangalan sa Dropdown list
+local function refreshDropdownOptions()
+    pcall(function() PlayerDropdown:Clear() end) 
+    PlayerDropdown:Add("None")
+    
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then 
+            PlayerDropdown:Add(p.Name)
+        end
+    end
+end
+
+refreshDropdownOptions()
+Players.PlayerAdded:Connect(refreshDropdownOptions)
+Players.PlayerRemoving:Connect(refreshDropdownOptions)
+
+-- =========================================================
+-- [LABELS GENERATOR - LALABAS SA ILALIM NG DROPDOWN]
+-- =========================================================
+for _, name in ipairs(TargetStatNames) do
+    Spy_UI_Labels[name] = SpyTab:AddLabel(name .. ": N/A | N/A | N/A | N/A")
+end
+
+-- 5. ASYNCHRONOUS VISUAL LOOP
+task.spawn(function()
+    while task.wait(0.2) do
+        if targetPlayer and targetPlayer.Parent == Players then
+            local elapsedSeconds = math.max(os.time() - spyStartTime, 1)
+            
+            local char = targetPlayer.Character
+            local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+            
+            for _, name in ipairs(TargetStatNames) do
+                local uiElement = Spy_UI_Labels[name]
+                local currentVal = 0
+                local sourceFound = false
+                
+                if name == "Health" then
+                    currentVal = humanoid and humanoid.Health or 0
+                    sourceFound = true
+                elseif name == "Speed" then
+                    currentVal = humanoid and humanoid.WalkSpeed or 0
+                    sourceFound = true
+                else
+                    local foundVal = getRemotePlayerStat(targetPlayer, name)
+                    if foundVal ~= nil then
+                        currentVal = foundVal
+                        sourceFound = true
+                    end
+                end
+                
+                if uiElement then
+                    if sourceFound then
+                        local startVal = targetBaselineStats[name] or currentVal
+                        
+                        if startVal == 0 and targetBaselineStats[name] == nil then
+                            targetBaselineStats[name] = currentVal
+                            startVal = currentVal
+                        end
+                        
+                        local gained = currentVal - startVal
+                        local formattedCurrent = formatNumber(currentVal)
+                        
+                        if name == "Health" then
+                            uiElement.Text = string.format("Health: %d / %d", currentVal, humanoid and humanoid.MaxHealth or 100)
+                        elseif name == "Speed" then
+                            uiElement.Text = string.format("Speed: %d studs/s", currentVal)
+                        elseif gained > 0 then
+                            local perSecond = gained / elapsedSeconds
+                            local perMinute = perSecond * 60
+                            local perHour = perSecond * 3600
+                            local perDay = perSecond * 86400
+                            local perWeek = perSecond * 604800
+                            
+                            uiElement.Text = string.format(
+                                "%s: %s (+%s) | /m: %s | /h: %s | /d: %s | /w: %s",
+                                name, 
+                                formattedCurrent, 
+                                formatNumber(gained),
+                                formatNumber(perMinute),
+                                formatNumber(perHour),
+                                formatNumber(perDay),
+                                formatNumber(perWeek)
+                            )
+                        else
+                            uiElement.Text = name .. ": " .. formattedCurrent .. " (+0) | /m: 0 | /h: 0 | /d: 0 | /w: 0"
+                        end
+                    else
+                        uiElement.Text = name .. ": Not Tracked"
+                    end
+                end
+            end
+        else
+            if next(targetBaselineStats) ~= nil then
+                resetSpyTracking()
+            end
+        end
+    end
+end)
