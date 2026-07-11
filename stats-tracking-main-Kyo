@@ -409,12 +409,325 @@ end)
 
 
 
+best
+
+
+
+local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/IVRzHxZ/Kyo-UI-Library/refs/heads/main/Kyo-UI-LibraryxPrivate", true))()
+
+-- Make sure the Players service is available
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- Dynamically generate the window title with a welcome message
+local windowTitle = "KyoWxUniversal | Welcome, " .. LocalPlayer.DisplayName
+
+local Window = library:AddWindow(windowTitle, {
+    main_color = Color3.fromRGB(41, 74, 122),
+    min_size = Vector2.new(600, 800),
+    can_resize = false
+})
+
+---------------------------------------------------------
+-- [SECTION 1: LOCAL PLAYER STATS TAB]
+---------------------------------------------------------
+local TrackerTab = Window:AddTab("Stats 📊")
+
+local myStatNames = {"Power", "Rebirth", "Kills"}
+local My_UI_Labels = {}
+local startingStats = {} 
+local startTime = os.time() 
+
+-- Dummy/Mock Object to represent an Attribute as a Value Object
+local AttributeMock = {}
+AttributeMock.__index = AttributeMock
+function AttributeMock.new(instance, attribName)
+    return setmetatable({Instance = instance, Name = attribName, ClassName = "AttributeValue", IsMock = true}, AttributeMock)
+end
+function AttributeMock:IsA(className) return className == "ValueBase" end
+-- Custom setter/getter proxy to let the loop treat it like a normal ValueObject
+local currentMeta = {
+    __index = function(t, k) if k == "Value" then return t.Instance:GetAttribute(t.Name) end return rawget(t, k) end,
+    __newindex = function(t, k, v) if k == "Value" then t.Instance:SetAttribute(t.Name, v) else rawset(t, k, v) end end
+}
+
+-- Construct UI Elements Natively
+for _, name in ipairs(myStatNames) do
+    My_UI_Labels[name] = TrackerTab:AddLabel(name .. ": Loading...")
+end
+
+-- Number Abbreviation Engine (1000 -> 1K)
+local suffixes = {"K", "M", "B", "T", "QA", "QI"}
+local function formatNumber(value)
+    if not value or typeof(value) ~= "number" then return "0" end
+    if value < 1000 then return tostring(value) end
+    
+    local index = math.floor(math.log10(value) / 3)
+    local suffix = suffixes[index] or ""
+    local abbreviated = value / (10 ^ (index * 3))
+    
+    return string.format("%.1f", abbreviated):gsub("%.0$", "") .. suffix
+end
+
+-- Nuclear Search Engine: Intercepts Folders, Character Model, Attributes, and Fuzzy Plurals
+local function locatePlayerStatObject(targetPlayer, statName)
+    if not targetPlayer then return nil end
+    local cleanTarget = string.lower(string.gsub(statName, "%s+", ""))
+    
+    -- --- METHOD 1: ATTRIBUTE SCAN (Most Modern Games) ---
+    -- Check attributes on Player instance
+    for attribName, _ in pairs(targetPlayer:GetAttributes()) do
+        local cleanAttrib = string.lower(string.gsub(attribName, "%s+", ""))
+        if cleanAttrib:find(cleanTarget) or cleanTarget:find(cleanAttrib) then
+            local mock = AttributeMock.new(targetPlayer, attribName)
+            return setmetatable(mock, currentMeta)
+        end
+    end
+    -- Check attributes on Character Model
+    if targetPlayer.Character then
+        for attribName, _ in pairs(targetPlayer.Character:GetAttributes()) do
+            local cleanAttrib = string.lower(string.gsub(attribName, "%s+", ""))
+            if cleanAttrib:find(cleanTarget) or cleanTarget:find(cleanAttrib) then
+                local mock = AttributeMock.new(targetPlayer.Character, attribName)
+                return setmetatable(mock, currentMeta)
+            end
+        end
+    end
+    
+    -- --- METHOD 2: DEEP FOLDER SCAN & FUZZY MATCH ---
+    local possibleFolders = {
+        "leaderstats", "Leaderboard", "Stats", "localstats", "Data", "leaderstats2", 
+        "Karma", "PlayerData", "Save", "Currency", "PointData", "Statistics", 
+        "PlayerStats", "Values", "LevelData", "Inventory", "HiddenStats", "CashData",
+        "Attributes", "Status", "RankData", "UserStats", "GameData"
+    }
+    
+    -- Check predefined folders with fuzzy text boundaries (e.g. catches "Kills" if searching "Kill")
+    for _, folderName in ipairs(possibleFolders) do
+        local folder = targetPlayer:FindFirstChild(folderName)
+        if folder then
+            for _, child in ipairs(folder:GetChildren()) do
+                local cleanChildName = string.lower(string.gsub(child.Name, "%s+", ""))
+                if cleanChildName:find(cleanTarget) or cleanTarget:find(cleanChildName) then 
+                    return child 
+                end
+            end
+        end
+    end
+    
+    -- Scan custom folders inside player root
+    for _, child in ipairs(targetPlayer:GetChildren()) do
+        if child:IsA("Folder") or child:IsA("Configuration") then
+            for _, subChild in ipairs(child:GetChildren()) do
+                local cleanSubChildName = string.lower(string.gsub(subChild.Name, "%s+", ""))
+                if cleanSubChildName:find(cleanTarget) or cleanTarget:find(cleanSubChildName) then 
+                    return subChild 
+                end
+            end
+        end
+    end
+    
+    -- Scan character model folders (Some games place stat objects inside your physical avatar)
+    if targetPlayer.Character then
+        for _, child in ipairs(targetPlayer.Character:GetChildren()) do
+            if child:IsA("Folder") or child:IsA("Configuration") or child.ClassName:find("Value") then
+                local cleanChildName = string.lower(string.gsub(child.Name, "%s+", ""))
+                if cleanChildName:find(cleanTarget) or cleanTarget:find(cleanChildName) then 
+                    return child 
+                end
+            end
+        end
+    end
+    
+    return nil
+end
+
+-- Capture Starting Baseline Values Immediately
+for _, name in ipairs(myStatNames) do
+    local statObj = locatePlayerStatObject(LocalPlayer, name)
+    if statObj then
+        startingStats[name] = tonumber(statObj.Value) or 0
+    else
+        startingStats[name] = 0
+    end
+end
+
+-- Asynchronous Visual Update Loop for Local Player
+task.spawn(function()
+    while task.wait(0.2) do
+        local elapsedSeconds = math.max(os.time() - startTime, 1) 
+        
+        for _, name in ipairs(myStatNames) do
+            local statObj = locatePlayerStatObject(LocalPlayer, name)
+            local uiElement = My_UI_Labels[name]
+            
+            if uiElement then
+                if statObj then
+                    local currentVal = tonumber(statObj.Value) or 0
+                    local startVal = startingStats[name] or currentVal
+                    
+                    if startVal == 0 and startingStats[name] == 0 then
+                        startingStats[name] = currentVal
+                        startVal = currentVal
+                    end
+                    
+                    local gained = currentVal - startVal
+                    local formattedCurrent = formatNumber(currentVal)
+                    
+                    if gained > 0 then
+                        local perSecond = gained / elapsedSeconds
+                        local perMinute = perSecond * 60
+                        local perHour = perSecond * 3600
+                        local perDay = perSecond * 86400
+                        local perWeek = perSecond * 604800
+                        
+                        uiElement.Text = string.format(
+                            "%s: %s (+%s) | /m: %s | /h: %s | /d: %s | /w: %s",
+                            name, 
+                            formattedCurrent, 
+                            formatNumber(gained),
+                            formatNumber(perMinute),
+                            formatNumber(perHour),
+                            formatNumber(perDay),
+                            formatNumber(perWeek)
+                        )
+                    else
+                        uiElement.Text = name .. ": " .. formattedCurrent .. " (+0) | /m: 0 | /h: 0 | /d: 0 | /w: 0"
+                    end
+                else
+                    uiElement.Text = name .. ": Missing"
+                end
+            end
+        end
+    end
+end)
+
+---------------------------------------------------------
+-- [SECTION 2: SPY PLAYER STATS TAB]
+---------------------------------------------------------
+local SpyTab = Window:AddTab("Spy Stats Player 👁️")
+
+local targetPlayer = nil 
+local spyStatNames = {"Power", "Rebirth", "Kills"}
+local Spy_UI_Labels = {}
+local targetBaselineStats = {} 
+local spyStartTime = os.time() 
+
+-- 1. Create Dropdown Object with custom Reset logic
+local PlayerDropdown = SpyTab:AddDropdown("Select Player...", function(selectedName)
+    -- Check if the user opted to clear tracking parameters
+    if selectedName == "None" or selectedName == "" then
+        targetPlayer = nil
+        targetBaselineStats = {}
+        return
+    end
+
+    local foundPlayer = Players:FindFirstChild(selectedName)
+    if foundPlayer then
+        targetBaselineStats = {}
+        targetPlayer = foundPlayer
+        spyStartTime = os.time() -- Reset clock baseline immediately for newly selected player
+        
+        -- Capture baseline data for the freshly selected player instantly
+        for _, name in ipairs(spyStatNames) do
+            local statObj = locatePlayerStatObject(targetPlayer, name)
+            if statObj and (statObj:IsA("ValueBase") or statObj.ClassName:find("Value")) then
+                targetBaselineStats[name] = tonumber(statObj.Value) or 0
+            else
+                targetBaselineStats[name] = 0
+            end
+        end
+    else
+        targetPlayer = nil
+    end
+end)
+
+-- 2. Populate Dropdown Options Safely
+local function refreshDropdownOptions()
+    pcall(function() PlayerDropdown:Clear() end) 
+    
+    -- Insert the functional reset anchor point first
+    PlayerDropdown:Add("None")
+    
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then 
+            PlayerDropdown:Add(p.Name)
+        end
+    end
+end
+
+refreshDropdownOptions()
+Players.PlayerAdded:Connect(refreshDropdownOptions)
+Players.PlayerRemoving:Connect(refreshDropdownOptions)
+
+-- Construct full projection display fields for the Spy Tab
+for _, name in ipairs(spyStatNames) do
+    Spy_UI_Labels[name] = SpyTab:AddLabel(name .. ": N/A (N/A) | /m: N/A | /h: N/A | /d: N/A | /w: N/A")
+end
+
+-- Asynchronous Visual Update Loop for the Selected Spy Target Player
+task.spawn(function()
+    while task.wait(0.2) do
+        if targetPlayer and targetPlayer.Parent == Players then
+            local elapsedSeconds = math.max(os.time() - spyStartTime, 1)
+            
+            for _, name in ipairs(spyStatNames) do
+                local statObj = locatePlayerStatObject(targetPlayer, name)
+                local uiElement = Spy_UI_Labels[name]
+                
+                if uiElement then
+                    if statObj and (statObj:IsA("ValueBase") or statObj.ClassName:find("Value")) then
+                        local currentVal = tonumber(statObj.Value) or 0
+                        local startVal = targetBaselineStats[name] or currentVal
+                        
+                        if startVal == 0 and targetBaselineStats[name] == 0 then
+                            targetBaselineStats[name] = currentVal
+                            startVal = currentVal
+                        end
+                        
+                        local gained = currentVal - startVal
+                        local formattedCurrent = formatNumber(currentVal)
+                        
+                        if gained > 0 then
+                            local perSecond = gained / elapsedSeconds
+                            local perMinute = perSecond * 60
+                            local perHour = perSecond * 3600
+                            local perDay = perSecond * 86400
+                            local perWeek = perSecond * 604800
+                            
+                            uiElement.Text = string.format(
+                                "%s: %s (+%s) | /m: %s | /h: %s | /d: %s | /w: %s",
+                                name, 
+                                formattedCurrent, 
+                                formatNumber(gained),
+                                formatNumber(perMinute),
+                                formatNumber(perHour),
+                                formatNumber(perDay),
+                                formatNumber(perWeek)
+                            )
+                        else
+                            uiElement.Text = name .. ": " .. formattedCurrent .. " (+0) | /m: 0 | /h: 0 | /d: 0 | /w: 0"
+                        end
+                    else
+                        uiElement.Text = name .. ": Missing"
+                    end
+                end
+            end
+        else
+             -- Clear interface display text elements back to default when no target is active
+            for _, name in ipairs(spyStatNames) do
+                if Spy_UI_Labels[name] then
+                    Spy_UI_Labels[name].Text = name .. ": N/A (N/A) | /m: N/A | /h: N/A | /d: N/A | /w: N/A"
+                end
+            end
+        end
+    end
+end)
 
 
 
 
-
-
+best
 
 ---------------------------------------------------------
 -- [SECTION 1: LOCAL PLAYER STATS TAB]
